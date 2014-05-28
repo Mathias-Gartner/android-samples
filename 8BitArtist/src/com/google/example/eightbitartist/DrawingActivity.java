@@ -39,22 +39,24 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.google.android.gms.common.images.ImageManager;
-import com.google.android.gms.games.GamesClient;
+import com.google.android.gms.games.Games;
+import com.google.android.gms.games.GamesStatusCodes;
 import com.google.android.gms.games.Player;
 import com.google.android.gms.games.multiplayer.Invitation;
+import com.google.android.gms.games.multiplayer.Multiplayer;
+import com.google.android.gms.games.multiplayer.OnInvitationReceivedListener;
 import com.google.android.gms.games.multiplayer.Participant;
 import com.google.android.gms.games.multiplayer.realtime.RoomConfig;
-import com.google.android.gms.games.multiplayer.turnbased.LoadMatchesResponse;
+import com.google.android.gms.games.multiplayer.turnbased.OnTurnBasedMatchUpdateReceivedListener;
 import com.google.android.gms.games.multiplayer.turnbased.TurnBasedMatch;
 import com.google.android.gms.games.multiplayer.turnbased.TurnBasedMatchConfig;
-import com.google.android.gms.games.multiplayer.turnbased.TurnBasedMultiplayerListener;
 import com.google.example.games.basegameutils.BaseGameActivity;
 
 // This is the main activity for all of 8BitArtist.
-// It displays a logged-out UI, a game-choosing UI (called "matchup"), 
+// It displays a logged-out UI, a game-choosing UI (called "matchup"),
 // and various playing UIs for drawing and guessing.
 public class DrawingActivity extends BaseGameActivity implements
-        TurnBasedMultiplayerListener {
+        OnTurnBasedMatchUpdateReceivedListener, OnInvitationReceivedListener {
     public static final String TAG = "DrawingActivity";
 
     public static final int ROLE_NOTHING = 0;
@@ -162,7 +164,7 @@ public class DrawingActivity extends BaseGameActivity implements
     public boolean onOptionsItemSelected(MenuItem item) {
         switch (item.getItemId()) {
             case R.id.menu_achievements:
-                startActivityForResult(getGamesClient().getAchievementsIntent(),
+                startActivityForResult(Games.Achievements.getAchievementsIntent(getApiClient()),
                         REQUEST_ACHIEVEMENTS);
                 return true;
         }
@@ -172,14 +174,14 @@ public class DrawingActivity extends BaseGameActivity implements
     // Look at your inbox. You will get back onActivityResult where
     // you will need to figure out what you clicked on.
     public void onCheckGamesClicked(View view) {
-        Intent intent = getGamesClient().getMatchInboxIntent();
+        Intent intent = Games.TurnBasedMultiplayer.getInboxIntent(getApiClient());
         startActivityForResult(intent, RC_LOOK_AT_MATCHES);
     }
 
     // Open the create-game UI. You will get back an onActivityResult
     // and figure out what to do.
     public void onStartMatchClicked(View view) {
-        Intent intent = getGamesClient().getSelectPlayersIntent(1, 1, true);
+        Intent intent = Games.TurnBasedMultiplayer.getSelectOpponentsIntent(getApiClient(), 1, 1, true);
         startActivityForResult(intent, RC_SELECT_PLAYERS);
     }
 
@@ -189,7 +191,7 @@ public class DrawingActivity extends BaseGameActivity implements
     // giving up on the view.
     public void onCancelClicked(View view) {
         showSpinner();
-        getGamesClient().cancelTurnBasedMatch(this, mMatch.getMatchId());
+        Games.TurnBasedMultiplayer.cancelMatch(getApiClient(), mMatch.getMatchId());
         isDoingTurn = false;
         updateViewVisibility();
     }
@@ -199,15 +201,14 @@ public class DrawingActivity extends BaseGameActivity implements
     public void onLeaveClicked(View view) {
         showSpinner();
         String nextParticipantId = getNextParticipantId();
-        getGamesClient().leaveTurnBasedMatchDuringTurn(this,
-                mMatch.getMatchId(), nextParticipantId);
+        Games.TurnBasedMultiplayer.leaveMatchDuringTurn(getApiClient(), mMatch.getMatchId(), nextParticipantId);
         updateViewVisibility();
     }
 
     // Finish the game. Sometimes, this is your only choice.
     public void onFinishClicked(View view) {
         showSpinner();
-        getGamesClient().finishTurnBasedMatch(this, mMatch.getMatchId());
+        Games.TurnBasedMultiplayer.finishMatch(getApiClient(), mMatch.getMatchId());
 
         isDoingTurn = false;
         updateViewVisibility();
@@ -245,7 +246,7 @@ public class DrawingActivity extends BaseGameActivity implements
         }
 
         ((TextView) findViewById(R.id.name_field)).setText("You are: "
-                + getGamesClient().getCurrentPlayer()
+                + Games.Players.getCurrentPlayer(getApiClient())
                         .getDisplayName());
 
         refreshTurnsPending();
@@ -281,17 +282,17 @@ public class DrawingActivity extends BaseGameActivity implements
         // This is *NOT* required; if you do not register a handler for
         // invitation events, you will get standard notifications instead.
         // Standard notifications may be preferable behavior in many cases.
-        getGamesClient().registerInvitationListener(this);
+        Games.Invitations.registerInvitationListener(getApiClient(), this);
 
         // Likewise, we are registering the optional MatchUpdateListener, which
         // will replace notifications you would get otherwise. You do *NOT* have
         // to register a MatchUpdateListener.
-        getGamesClient().registerMatchUpdateListener(this);
+        Games.TurnBasedMultiplayer.registerMatchUpdateListener(getApiClient(), this);
     }
 
     // Update the number of available turns
     public void refreshTurnsPending() {
-        getGamesClient().loadTurnBasedMatches(this, TurnBasedMatch.MATCH_TURN_STATUS_MY_TURN);
+        Games.TurnBasedMultiplayer.loadMatchesByStatus(getApiClient(), new int[]{TurnBasedMatch.MATCH_TURN_STATUS_MY_TURN});
 
         TextView textView = (TextView) findViewById(R.id.turns_to_go);
         textView.setText("...");
@@ -340,7 +341,7 @@ public class DrawingActivity extends BaseGameActivity implements
             }
 
             TurnBasedMatch match = data
-                    .getParcelableExtra(GamesClient.EXTRA_TURN_BASED_MATCH);
+                    .getParcelableExtra(Multiplayer.EXTRA_TURN_BASED_MATCH);
 
             if (match != null) {
                 updateMatch(match);
@@ -361,15 +362,15 @@ public class DrawingActivity extends BaseGameActivity implements
 
             // get the invitee list
             final ArrayList<String> invitees = data
-                    .getStringArrayListExtra(GamesClient.EXTRA_PLAYERS);
+                    .getStringArrayListExtra(Games.EXTRA_PLAYER_IDS);// GamesClient.EXTRA_PLAYERS);
 
             // get automatch criteria
             Bundle autoMatchCriteria = null;
 
             int minAutoMatchPlayers = data.getIntExtra(
-                    GamesClient.EXTRA_MIN_AUTOMATCH_PLAYERS, 0);
+                    Multiplayer.EXTRA_MIN_AUTOMATCH_PLAYERS, 0);
             int maxAutoMatchPlayers = data.getIntExtra(
-                    GamesClient.EXTRA_MAX_AUTOMATCH_PLAYERS, 0);
+                    Multiplayer.EXTRA_MAX_AUTOMATCH_PLAYERS, 0);
 
             if (minAutoMatchPlayers > 0) {
                 autoMatchCriteria = RoomConfig.createAutoMatchCriteria(
@@ -383,7 +384,7 @@ public class DrawingActivity extends BaseGameActivity implements
                     .setAutoMatchCriteria(autoMatchCriteria).build();
 
             // Start the match
-            getGamesClient().createTurnBasedMatch(this, tbmc);
+            Games.TurnBasedMultiplayer.createMatch(getApiClient(), tbmc);
 
             showSpinner();
         }
@@ -412,8 +413,7 @@ public class DrawingActivity extends BaseGameActivity implements
 
         showSpinner();
 
-        getGamesClient().takeTurn(this, match.getMatchId(),
-                mTurnData.persist(), myParticipantId);
+        Games.TurnBasedMultiplayer.takeTurn(getApiClient(), mMatch.getMatchId(), mTurnData.persist(), myParticipantId);
 
         // Persistence check
         DrawingTurn check = DrawingTurn.unpersist(mTurnData.persist());
@@ -431,7 +431,7 @@ public class DrawingActivity extends BaseGameActivity implements
     // If you choose to rematch, then call it and wait for a response.
     public void rematch() {
         showSpinner();
-        getGamesClient().rematchTurnBasedMatch(this, mMatch.getMatchId());
+        Games.TurnBasedMultiplayer.rematch(getApiClient(), mMatch.getMatchId());
         mMatch = null;
         isDoingTurn = false;
     }
@@ -441,13 +441,12 @@ public class DrawingActivity extends BaseGameActivity implements
      * round-robin, with all known players going before all automatch players.
      * This is not a requirement; players can go in any order. However, you can
      * take turns in any order.
-     * 
+     *
      * @return participantId of next player, or null if automatching
      */
     public String getNextParticipantId() {
 
-        String myParticipantId = mMatch.getParticipantId(getGamesClient()
-                .getCurrentPlayerId());
+        String myParticipantId = mMatch.getParticipantId(Games.Players.getCurrentPlayerId(getApiClient()));
 
         ArrayList<String> participantIds = mMatch.getParticipantIds();
 
@@ -557,8 +556,7 @@ public class DrawingActivity extends BaseGameActivity implements
 
                 // Otherwise, it must be turn 1
                 if (mTurnData.artistTurn.turnNumber < 2) {
-                    getGamesClient().unlockAchievement(
-                            getResources().getString(R.string.achievement_started_a_game));
+                    Games.Achievements.unlock(getApiClient(), getResources().getString(R.string.achievement_started_a_game));
                 }
 
                 if (!skipTakeTurnUpdate) {
@@ -577,7 +575,7 @@ public class DrawingActivity extends BaseGameActivity implements
         updateViewVisibility();
     }
 
-    @Override
+    /*@Override
     public void onTurnBasedMatchCanceled(int statusCode, String matchId) {
         dismissSpinner();
 
@@ -639,7 +637,7 @@ public class DrawingActivity extends BaseGameActivity implements
         // head back to the main screen.
         mStateManager.transitionState(StateManager.STATE_MATCHUP);
 
-    }
+    }*/
 
     // Handle notification events.
     @Override
@@ -658,12 +656,12 @@ public class DrawingActivity extends BaseGameActivity implements
         Toast.makeText(this, "An invitation was removed.", TOAST_DELAY).show();
     }
 
-    @Override
+    /*@Override
     public void onTurnBasedMatchesLoaded(int statusCode,
             LoadMatchesResponse response) {
 
         TextView textView = (TextView) findViewById(R.id.turns_to_go);
-        if (statusCode != GamesClient.STATUS_OK) {
+        if (statusCode != GamesStatusCodes.STATUS_OK) {
             textView.setText("");
             return;
         }
@@ -676,7 +674,7 @@ public class DrawingActivity extends BaseGameActivity implements
         } else {
             textView.setText("");
         }
-    }
+    }*/
 
     @Override
     public void onTurnBasedMatchReceived(TurnBasedMatch match) {
@@ -699,9 +697,9 @@ public class DrawingActivity extends BaseGameActivity implements
     // more cases, and probably report more accurate results.
     private boolean checkStatusCode(TurnBasedMatch match, int statusCode) {
         switch (statusCode) {
-            case GamesClient.STATUS_OK:
+            case GamesStatusCodes.STATUS_OK:
                 return true;
-            case GamesClient.STATUS_NETWORK_ERROR_OPERATION_DEFERRED:
+            case GamesStatusCodes.STATUS_NETWORK_ERROR_OPERATION_DEFERRED:
                 // This is OK; the action is stored by Google Play Services and will
                 // be dealt with later.
                 Toast.makeText(
@@ -711,30 +709,30 @@ public class DrawingActivity extends BaseGameActivity implements
                 // NOTE: This toast is for informative reasons only; please remove
                 // it from your final application.
                 return true;
-            case GamesClient.STATUS_MULTIPLAYER_ERROR_NOT_TRUSTED_TESTER:
+            case GamesStatusCodes.STATUS_MULTIPLAYER_ERROR_NOT_TRUSTED_TESTER:
                 showErrorMessage(match, statusCode,
                         R.string.status_multiplayer_error_not_trusted_tester);
                 break;
-            case GamesClient.STATUS_MATCH_ERROR_ALREADY_REMATCHED:
+            case GamesStatusCodes.STATUS_MATCH_ERROR_ALREADY_REMATCHED:
                 showErrorMessage(match, statusCode,
                         R.string.match_error_already_rematched);
                 break;
-            case GamesClient.STATUS_NETWORK_ERROR_OPERATION_FAILED:
+            case GamesStatusCodes.STATUS_NETWORK_ERROR_OPERATION_FAILED:
                 showErrorMessage(match, statusCode,
                         R.string.network_error_operation_failed);
                 break;
-            case GamesClient.STATUS_CLIENT_RECONNECT_REQUIRED:
+            case GamesStatusCodes.STATUS_CLIENT_RECONNECT_REQUIRED:
                 showErrorMessage(match, statusCode,
                         R.string.client_reconnect_required);
                 break;
-            case GamesClient.STATUS_INTERNAL_ERROR:
+            case GamesStatusCodes.STATUS_INTERNAL_ERROR:
                 showErrorMessage(match, statusCode, R.string.internal_error);
                 break;
-            case GamesClient.STATUS_MATCH_ERROR_INACTIVE_MATCH:
+            case GamesStatusCodes.STATUS_MATCH_ERROR_INACTIVE_MATCH:
                 showErrorMessage(match, statusCode,
                         R.string.match_error_inactive_match);
                 break;
-            case GamesClient.STATUS_MATCH_ERROR_LOCALLY_MODIFIED:
+            case GamesStatusCodes.STATUS_MATCH_ERROR_LOCALLY_MODIFIED:
                 showErrorMessage(match, statusCode,
                         R.string.match_error_locally_modified);
                 break;
@@ -813,10 +811,8 @@ public class DrawingActivity extends BaseGameActivity implements
                             .get(mTurnData.guessingTurn.guessedWord)
                             + " is correct!\n\nWould you like keep playing?");
 
-            getGamesClient().revealAchievement(
-                    getResources().getString(R.string.achievement_guessed_correctly));
-            getGamesClient().unlockAchievement(
-                    getResources().getString(R.string.achievement_guessed_correctly));
+            Games.Achievements.reveal(getApiClient(), getResources().getString(R.string.achievement_guessed_correctly));
+            Games.Achievements.unlock(getApiClient(), getResources().getString(R.string.achievement_guessed_correctly));
         } else {
             alertDialogBuilder.setTitle("No!").setMessage(
                     mTurnData.guessingTurn.words
@@ -825,8 +821,7 @@ public class DrawingActivity extends BaseGameActivity implements
                             + mTurnData.guessingTurn.words
                                     .get(mTurnData.guessingTurn.wordIndex)
                             + "\n\nWould you like to draw next?");
-            getGamesClient().unlockAchievement(
-                    getResources().getString(R.string.achievement_got_one_wrong));
+            Games.Achievements.unlock(getApiClient(), getResources().getString(R.string.achievement_got_one_wrong));
         }
 
         if (mMatch.getStatus() == TurnBasedMatch.MATCH_STATUS_COMPLETE) {
@@ -1049,7 +1044,7 @@ public class DrawingActivity extends BaseGameActivity implements
 
         showSpinner();
 
-        getGamesClient().takeTurn(this, mMatch.getMatchId(),
+        Games.TurnBasedMultiplayer.takeTurn(getApiClient(), mMatch.getMatchId(),
                 mTurnData.persist(), nextParticipantId);
 
         mTurnData = null;
@@ -1063,13 +1058,11 @@ public class DrawingActivity extends BaseGameActivity implements
                 : mTurnData.guessingTurn.turnNumber + 1);
 
         if (turnNum >= 5) {
-            getGamesClient().unlockAchievement(
-                    getResources().getString(R.string.achievement_5_turns));
+            Games.Achievements.unlock(getApiClient(), getResources().getString(R.string.achievement_5_turns));
         }
 
         if (turnNum >= 10) {
-            getGamesClient().unlockAchievement(
-                    getResources().getString(R.string.achievement_10_turns));
+            Games.Achievements.unlock(getApiClient(), getResources().getString(R.string.achievement_10_turns));
         }
 
         // I am the only person who will create
@@ -1106,7 +1099,7 @@ public class DrawingActivity extends BaseGameActivity implements
 
         skipTakeTurnUpdate = true;
 
-        getGamesClient().takeTurn(this, mMatch.getMatchId(),
+        Games.TurnBasedMultiplayer.takeTurn(getApiClient(), mMatch.getMatchId(),
                 mTurnData.persist(),
                 getCurrentParticipant().getParticipantId());
 
@@ -1167,7 +1160,7 @@ public class DrawingActivity extends BaseGameActivity implements
         showSpinner();
 
         // Quit the game
-        getGamesClient().finishTurnBasedMatch(this, mMatch.getMatchId());
+        Games.TurnBasedMultiplayer.finishMatch(getApiClient(), mMatch.getMatchId());
     }
 
     public void resetWords(TurnSegment turn) {
@@ -1256,6 +1249,6 @@ public class DrawingActivity extends BaseGameActivity implements
     }
 
     public Participant getCurrentParticipant() {
-        return getParticipantForPlayerId(getGamesClient().getCurrentPlayerId());
+        return getParticipantForPlayerId(Games.Players.getCurrentPlayerId(getApiClient()));
     }
 }
